@@ -15,6 +15,13 @@ interface LoginPayload {
   username?: string;
 }
 
+type Exchange = "NSE" | "BSE";
+
+interface AddWatchlistPayload {
+  symbol: string;
+  exchange: Exchange;
+}
+
 export const authApi = {
   register(payload: RegisterPayload): Promise<ApiEnvelope<AuthTokenData | UserProfile>> {
     return request<AuthTokenData | UserProfile>("/api/v1/auth/register", {
@@ -75,13 +82,11 @@ export const watchlistApi = {
     });
   },
 
-  add(symbol: string): Promise<ApiEnvelope<WatchlistEntry | { item: WatchlistEntry } | { entry: WatchlistEntry }>> {
+  add(payload: AddWatchlistPayload): Promise<ApiEnvelope<WatchlistEntry | { item: WatchlistEntry } | { entry: WatchlistEntry }>> {
     return request<WatchlistEntry | { item: WatchlistEntry } | { entry: WatchlistEntry }>("/api/v1/watchlist", {
       method: "POST",
       auth: true,
-      body: {
-        symbol
-      }
+      body: payload
     });
   },
 

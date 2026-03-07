@@ -7,6 +7,7 @@ import { AuthTokenData, UserProfile, WatchlistEntry } from "./types/api";
 const WATCHLIST_LIMIT = 15;
 
 type AuthMode = "login" | "register";
+type Exchange = "NSE" | "BSE";
 
 function asObject(input: unknown): Record<string, unknown> | null {
   if (!input || typeof input !== "object") {
@@ -58,6 +59,7 @@ function parseWatchlist(data: unknown): WatchlistEntry[] {
 
 function normalizeEntry(entry: WatchlistEntry, index: number): WatchlistEntry {
   const symbol = (entry.symbol ?? entry.ticker ?? "").toString().trim().toUpperCase();
+  const exchange = (entry.exchange ?? "NSE").toString().trim().toUpperCase();
   const companyName = (entry.company_name ?? entry.stock_name ?? "").toString().trim();
   const id = entry.stock_id ?? entry.id ?? `${symbol || "STOCK"}-${index}`;
   return {
@@ -65,6 +67,7 @@ function normalizeEntry(entry: WatchlistEntry, index: number): WatchlistEntry {
     id,
     stock_id: entry.stock_id ?? id,
     symbol,
+    exchange,
     company_name: companyName
   };
 }
@@ -115,6 +118,7 @@ export default function App(): JSX.Element {
   const [confirmPassword, setConfirmPassword] = useState("");
 
   const [symbolInput, setSymbolInput] = useState("");
+  const [selectedExchange, setSelectedExchange] = useState<Exchange>("NSE");
   const [user, setUser] = useState<UserProfile | null>(null);
   const [watchlist, setWatchlist] = useState<WatchlistEntry[]>([]);
 
@@ -293,10 +297,13 @@ export default function App(): JSX.Element {
 
     setIsMutatingWatchlist(true);
     try {
-      const response = await watchlistApi.add(trimmedSymbol);
+      const response = await watchlistApi.add({
+        symbol: trimmedSymbol,
+        exchange: selectedExchange
+      });
       setSymbolInput("");
       await refreshWatchlist(false);
-      setStatusMessage(response.message || `${trimmedSymbol.toUpperCase()} added to watchlist.`);
+      setStatusMessage(response.message || `${trimmedSymbol.toUpperCase()} (${selectedExchange}) added to watchlist.`);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     } finally {
@@ -336,9 +343,6 @@ export default function App(): JSX.Element {
 
   return (
     <div className="app-shell">
-      <div className="ambient ambient-left" />
-      <div className="ambient ambient-right" />
-
       <header className="top-bar">
         <div className="brand-block">
           <p className="eyebrow">Invest Alert</p>
@@ -506,6 +510,14 @@ export default function App(): JSX.Element {
                   disabled={isMutatingWatchlist || isWatchlistFull}
                   maxLength={80}
                 />
+                <select
+                  value={selectedExchange}
+                  onChange={(event) => setSelectedExchange(event.target.value === "BSE" ? "BSE" : "NSE")}
+                  disabled={isMutatingWatchlist || isWatchlistFull}
+                >
+                  <option value="NSE">NSE</option>
+                  <option value="BSE">BSE</option>
+                </select>
                 <button className="btn btn-primary" type="submit" disabled={isMutatingWatchlist || isWatchlistFull}>
                   {isMutatingWatchlist ? "Adding..." : "Add"}
                 </button>
@@ -535,7 +547,9 @@ export default function App(): JSX.Element {
                     return (
                       <li key={getEntryKey(entry, index)} className="watchlist-item" style={{ animationDelay: `${index * 60}ms` }}>
                         <div>
-                          <p className="symbol">{entry.symbol || "N/A"}</p>
+                          <p className="symbol">
+                            {entry.symbol || "N/A"} <span className="exchange-badge">{entry.exchange || "NSE"}</span>
+                          </p>
                           <p className="muted small">{entry.company_name || "Company name unavailable"}</p>
                           <p className="muted tiny">{formatDate(entry.created_at)}</p>
                         </div>

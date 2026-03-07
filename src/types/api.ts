@@ -30,6 +30,7 @@ export interface WatchlistEntry {
   stock_id?: number | string;
   symbol?: string;
   ticker?: string;
+  exchange?: string | null;
   company_name?: string | null;
   stock_name?: string | null;
   created_at?: string | null;
