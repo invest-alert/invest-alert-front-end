@@ -1,84 +1,62 @@
-import { ApiEnvelope } from "../types/api";
-import { getTokens, saveTokens, StoredTokens } from "./storage";
+import { ApiResponse, ApiSuccess, TokenPair } from "../types/api";
+import { clearStoredTokens, getStoredTokens, saveStoredTokens } from "./storage";
 
 export const API_BASE_URL =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "http://127.0.0.1:8000";
 
-interface RequestOptions {
-  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+export const API_PREFIX = "/api/v1";
+
+type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+type RequestOptions = {
+  method?: HttpMethod;
   body?: unknown;
   auth?: boolean;
   headers?: Record<string, string>;
   retry?: boolean;
-  form?: URLSearchParams;
-}
+  signal?: AbortSignal;
+};
 
-interface ApiErrorShape {
-  code?: string;
-  details?: unknown;
-}
+type ApiErrorShape = {
+  code: string;
+  details: unknown;
+} | null;
 
-interface EnvelopeShape {
-  success?: boolean;
-  message?: string;
-  data?: unknown;
-  error?: ApiErrorShape | null;
-}
+let unauthorizedHandler: (() => void) | null = null;
 
 export class ApiClientError extends Error {
   code: string;
   status: number;
   details: unknown;
 
-  constructor(message: string, code: string, status: number, details?: unknown) {
+  constructor(message: string, code: string, status: number, details: unknown) {
     super(message);
     this.name = "ApiClientError";
     this.code = code;
     this.status = status;
-    this.details = details ?? null;
+    this.details = details;
   }
 }
 
-function asObject(input: unknown): Record<string, unknown> | null {
-  if (!input || typeof input !== "object") {
-    return null;
-  }
-  return input as Record<string, unknown>;
+export function setUnauthorizedHandler(handler: (() => void) | null): void {
+  unauthorizedHandler = handler;
 }
 
-function asEnvelope(input: unknown): EnvelopeShape | null {
-  const candidate = asObject(input);
-  if (!candidate) {
-    return null;
-  }
-  if (!("success" in candidate) || !("message" in candidate)) {
-    return null;
-  }
-  return candidate as EnvelopeShape;
+function toApiUrl(path: string): string {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${API_BASE_URL}${API_PREFIX}${normalizedPath}`;
 }
 
-function extractTokens(input: unknown, fallback?: StoredTokens): StoredTokens | null {
-  const candidate = asObject(input);
-  if (!candidate) {
-    return null;
+function isApiResponse<T>(payload: unknown): payload is ApiResponse<T> {
+  if (!payload || typeof payload !== "object") {
+    return false;
   }
 
-  const accessToken = (candidate.access_token as string | undefined) ?? fallback?.accessToken;
-  const refreshToken = (candidate.refresh_token as string | undefined) ?? fallback?.refreshToken;
-  const tokenType = ((candidate.token_type as string | undefined) ?? fallback?.tokenType ?? "bearer").toLowerCase();
-
-  if (!accessToken || !refreshToken) {
-    return null;
-  }
-
-  return {
-    accessToken,
-    refreshToken,
-    tokenType
-  };
+  const candidate = payload as Record<string, unknown>;
+  return "success" in candidate && "message" in candidate && "data" in candidate && "error" in candidate;
 }
 
-async function parseJson(response: Response): Promise<unknown> {
+async function parseResponseBody(response: Response): Promise<unknown> {
   const text = await response.text();
   if (!text) {
     return null;
@@ -91,97 +69,112 @@ async function parseJson(response: Response): Promise<unknown> {
   }
 }
 
-async function refreshAccessToken(tokens: StoredTokens): Promise<StoredTokens | null> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/auth/refresh`, {
+function getErrorShape(payload: unknown): ApiErrorShape {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const error = (payload as { error?: unknown }).error;
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+
+  const candidate = error as Record<string, unknown>;
+  return {
+    code: typeof candidate.code === "string" ? candidate.code : "API_ERROR",
+    details: candidate.details ?? null
+  };
+}
+
+function toApiClientError(payload: unknown, status: number, fallbackMessage: string): ApiClientError {
+  if (isApiResponse(payload)) {
+    const error = getErrorShape(payload);
+    return new ApiClientError(payload.message, error?.code ?? "API_ERROR", status, error?.details ?? null);
+  }
+
+  if (typeof payload === "string" && payload.trim()) {
+    return new ApiClientError(payload, "HTTP_ERROR", status, null);
+  }
+
+  return new ApiClientError(fallbackMessage, "HTTP_ERROR", status, payload);
+}
+
+async function refreshAccessToken(tokens: TokenPair): Promise<TokenPair | null> {
+  const response = await fetch(toApiUrl("/auth/refresh"), {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ refresh_token: tokens.refreshToken })
+    body: JSON.stringify({
+      refresh_token: tokens.refresh_token
+    })
   });
 
-  const parsed = await parseJson(response);
-  const envelope = asEnvelope(parsed);
-
-  if (!response.ok || !envelope || !envelope.success) {
+  const payload = await parseResponseBody(response);
+  if (!response.ok || !isApiResponse<TokenPair>(payload) || !payload.success) {
     return null;
   }
 
-  const nextTokens = extractTokens(envelope.data, tokens);
-  if (!nextTokens) {
-    return null;
-  }
-
-  saveTokens(nextTokens);
+  const nextTokens = payload.data;
+  saveStoredTokens(nextTokens);
   return nextTokens;
 }
 
-function toApiClientError(payload: unknown, status: number, statusText: string): ApiClientError {
-  const envelope = asEnvelope(payload);
-
-  if (envelope) {
-    const code = envelope.error?.code ?? "API_ERROR";
-    const message = envelope.message ?? "Request failed";
-    return new ApiClientError(message, code, status, envelope.error?.details);
-  }
-
-  if (typeof payload === "string") {
-    return new ApiClientError(payload, "HTTP_ERROR", status, null);
-  }
-
-  return new ApiClientError(statusText || "Request failed", "HTTP_ERROR", status, payload);
-}
-
-export async function request<T>(path: string, options: RequestOptions = {}): Promise<ApiEnvelope<T>> {
-  const method = options.method ?? "GET";
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<ApiSuccess<T>> {
+  const tokens = getStoredTokens();
   const headers = new Headers(options.headers ?? {});
-  const tokens = getTokens();
 
-  if (options.auth && tokens?.accessToken) {
-    headers.set("Authorization", `Bearer ${tokens.accessToken}`);
-  }
-
-  let body: string | undefined;
-  if (options.form) {
-    headers.set("Content-Type", "application/x-www-form-urlencoded");
-    body = options.form.toString();
-  } else if (options.body !== undefined) {
+  if (options.body !== undefined) {
     headers.set("Content-Type", "application/json");
-    body = JSON.stringify(options.body);
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method,
+  if (options.auth && tokens?.access_token) {
+    headers.set("Authorization", `Bearer ${tokens.access_token}`);
+  }
+
+  const response = await fetch(toApiUrl(path), {
+    method: options.method ?? "GET",
     headers,
-    body
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    signal: options.signal
   });
 
-  const payload = await parseJson(response);
+  const payload = await parseResponseBody(response);
 
-  if (response.status === 401 && options.auth && !options.retry && tokens?.refreshToken) {
+  if (response.status === 401 && options.auth && !options.retry && tokens?.refresh_token) {
     const nextTokens = await refreshAccessToken(tokens);
     if (nextTokens) {
       return request<T>(path, { ...options, retry: true });
     }
+
+    clearStoredTokens();
+    unauthorizedHandler?.();
   }
 
   if (!response.ok) {
-    throw toApiClientError(payload, response.status, response.statusText);
+    throw toApiClientError(payload, response.status, response.statusText || "Request failed");
   }
 
-  const envelope = asEnvelope(payload);
-  if (!envelope) {
-    throw new ApiClientError("Unexpected response envelope", "BAD_RESPONSE", response.status, payload);
+  if (!isApiResponse<T>(payload)) {
+    throw new ApiClientError("Unexpected API response format", "BAD_RESPONSE", response.status, payload);
   }
 
-  if (!envelope.success) {
-    throw new ApiClientError(
-      envelope.message ?? "Request failed",
-      envelope.error?.code ?? "API_ERROR",
-      response.status,
-      envelope.error?.details
-    );
+  if (!payload.success) {
+    const error = getErrorShape(payload);
+    throw new ApiClientError(payload.message, error?.code ?? "API_ERROR", response.status, error?.details ?? null);
   }
 
-  return envelope as ApiEnvelope<T>;
+  return payload;
+}
+
+export function getApiErrorMessage(error: unknown): string {
+  if (error instanceof ApiClientError) {
+    return error.message;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "Something went wrong. Please try again.";
 }

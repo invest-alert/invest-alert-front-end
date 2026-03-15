@@ -1,46 +1,48 @@
-export interface StoredTokens {
-  accessToken: string;
-  refreshToken: string;
-  tokenType: string;
+import { TokenPair } from "../types/api";
+
+const TOKEN_STORAGE_KEY = "invest_alert.auth.tokens";
+
+function canUseStorage(): boolean {
+  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
 }
 
-const TOKEN_KEY = "invest_alert_tokens";
-
-function isBrowserReady(): boolean {
-  return typeof window !== "undefined" && Boolean(window.localStorage);
-}
-
-export function getTokens(): StoredTokens | null {
-  if (!isBrowserReady()) {
+export function getStoredTokens(): TokenPair | null {
+  if (!canUseStorage()) {
     return null;
   }
 
-  const rawValue = window.localStorage.getItem(TOKEN_KEY);
-  if (!rawValue) {
+  const value = window.localStorage.getItem(TOKEN_STORAGE_KEY);
+  if (!value) {
     return null;
   }
 
   try {
-    const parsed = JSON.parse(rawValue) as StoredTokens;
-    if (!parsed.accessToken || !parsed.refreshToken) {
+    const parsed = JSON.parse(value) as TokenPair;
+    if (!parsed.access_token || !parsed.refresh_token) {
       return null;
     }
-    return parsed;
+    return {
+      access_token: parsed.access_token,
+      refresh_token: parsed.refresh_token,
+      token_type: "bearer"
+    };
   } catch {
     return null;
   }
 }
 
-export function saveTokens(tokens: StoredTokens): void {
-  if (!isBrowserReady()) {
+export function saveStoredTokens(tokens: TokenPair): void {
+  if (!canUseStorage()) {
     return;
   }
-  window.localStorage.setItem(TOKEN_KEY, JSON.stringify(tokens));
+
+  window.localStorage.setItem(TOKEN_STORAGE_KEY, JSON.stringify(tokens));
 }
 
-export function clearTokens(): void {
-  if (!isBrowserReady()) {
+export function clearStoredTokens(): void {
+  if (!canUseStorage()) {
     return;
   }
-  window.localStorage.removeItem(TOKEN_KEY);
+
+  window.localStorage.removeItem(TOKEN_STORAGE_KEY);
 }

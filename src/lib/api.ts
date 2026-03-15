@@ -1,99 +1,119 @@
-import { ApiEnvelope, AuthTokenData, UserProfile, WatchlistEntry } from "../types/api";
+import {
+  DailyContextHarvestSummary,
+  DailyContextItem,
+  Exchange,
+  SummaryTaskStatus,
+  TokenPair,
+  UserProfile,
+  WatchlistItem
+} from "../types/api";
+import { getStoredTokens } from "./storage";
 import { request } from "./http";
-import { getTokens } from "./storage";
 
-interface RegisterPayload {
+type AuthPayload = {
   email: string;
   password: string;
-  full_name?: string;
-  name?: string;
-}
+};
 
-interface LoginPayload {
-  email: string;
-  password: string;
-  username?: string;
-}
-
-type Exchange = "NSE" | "BSE";
-
-interface AddWatchlistPayload {
+type AddWatchlistPayload = {
   symbol: string;
   exchange: Exchange;
-}
+};
 
 export const authApi = {
-  register(payload: RegisterPayload): Promise<ApiEnvelope<AuthTokenData | UserProfile>> {
-    return request<AuthTokenData | UserProfile>("/api/v1/auth/register", {
+  register(payload: AuthPayload) {
+    return request<TokenPair>("/auth/register", {
       method: "POST",
       body: payload
     });
   },
 
-  login(payload: LoginPayload): Promise<ApiEnvelope<AuthTokenData>> {
-    return request<AuthTokenData>("/api/v1/auth/login", {
+  login(payload: AuthPayload) {
+    return request<TokenPair>("/auth/login", {
       method: "POST",
       body: payload
     });
   },
 
-  tokenLogin(username: string, password: string): Promise<ApiEnvelope<AuthTokenData>> {
-    const form = new URLSearchParams({
-      username,
-      password
-    });
-
-    return request<AuthTokenData>("/api/v1/auth/token", {
-      method: "POST",
-      form
-    });
-  },
-
-  refresh(): Promise<ApiEnvelope<AuthTokenData>> {
-    const tokens = getTokens();
-    return request<AuthTokenData>("/api/v1/auth/refresh", {
+  refresh() {
+    const tokens = getStoredTokens();
+    return request<TokenPair>("/auth/refresh", {
       method: "POST",
       body: {
-        refresh_token: tokens?.refreshToken ?? ""
+        refresh_token: tokens?.refresh_token ?? ""
       }
     });
   },
 
-  me(): Promise<ApiEnvelope<UserProfile>> {
-    return request<UserProfile>("/api/v1/auth/me", {
-      auth: true
+  logout() {
+    const tokens = getStoredTokens();
+    return request<null>("/auth/logout", {
+      method: "POST",
+      auth: true,
+      body: {
+        refresh_token: tokens?.refresh_token ?? ""
+      }
     });
   },
 
-  logout(): Promise<ApiEnvelope<null>> {
-    const tokens = getTokens();
-    return request<null>("/api/v1/auth/logout", {
-      method: "POST",
+  me(signal?: AbortSignal) {
+    return request<UserProfile>("/auth/me", {
       auth: true,
-      body: tokens?.refreshToken ? { refresh_token: tokens.refreshToken } : {}
+      signal
     });
   }
 };
 
 export const watchlistApi = {
-  list(): Promise<ApiEnvelope<WatchlistEntry[] | { watchlist: WatchlistEntry[] } | { items: WatchlistEntry[] }>> {
-    return request<WatchlistEntry[] | { watchlist: WatchlistEntry[] } | { items: WatchlistEntry[] }>("/api/v1/watchlist", {
-      auth: true
+  list(signal?: AbortSignal) {
+    return request<WatchlistItem[]>("/watchlist", {
+      auth: true,
+      signal
     });
   },
 
-  add(payload: AddWatchlistPayload): Promise<ApiEnvelope<WatchlistEntry | { item: WatchlistEntry } | { entry: WatchlistEntry }>> {
-    return request<WatchlistEntry | { item: WatchlistEntry } | { entry: WatchlistEntry }>("/api/v1/watchlist", {
+  add(payload: AddWatchlistPayload) {
+    return request<WatchlistItem>("/watchlist", {
       method: "POST",
       auth: true,
       body: payload
     });
   },
 
-  remove(stockId: string | number): Promise<ApiEnvelope<null>> {
-    return request<null>(`/api/v1/watchlist/${stockId}`, {
+  remove(stockId: string) {
+    return request<null>(`/watchlist/${stockId}`, {
       method: "DELETE",
       auth: true
+    });
+  }
+};
+
+export const dailyContextApi = {
+  list(date: string, signal?: AbortSignal) {
+    return request<DailyContextItem[]>(`/daily-context?date=${encodeURIComponent(date)}`, {
+      auth: true,
+      signal
+    });
+  },
+
+  harvest(date: string) {
+    return request<DailyContextHarvestSummary>(`/daily-context/harvest?date=${encodeURIComponent(date)}`, {
+      method: "POST",
+      auth: true
+    });
+  },
+
+  requeueSummaries(contextId: string) {
+    return request<Record<string, unknown> | null>(`/daily-context/${contextId}/summaries`, {
+      method: "POST",
+      auth: true
+    });
+  },
+
+  taskStatus(taskId: string, signal?: AbortSignal) {
+    return request<SummaryTaskStatus>(`/daily-context/tasks/${taskId}`, {
+      auth: true,
+      signal
     });
   }
 };
