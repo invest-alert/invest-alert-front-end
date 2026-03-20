@@ -2,6 +2,7 @@ import {
   DailyContextHarvestSummary,
   DailyContextItem,
   Exchange,
+  MarketOverviewItem,
   SummaryTaskStatus,
   TokenPair,
   UserProfile,
@@ -112,6 +113,15 @@ export const dailyContextApi = {
 
   taskStatus(taskId: string, signal?: AbortSignal) {
     return request<SummaryTaskStatus>(`/daily-context/tasks/${taskId}`, {
+      auth: true,
+      signal
+    });
+  }
+};
+
+export const marketApi = {
+  overview(signal?: AbortSignal) {
+    return request<MarketOverviewItem[]>("/market-overview", {
       auth: true,
       signal
     });

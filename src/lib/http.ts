@@ -167,6 +167,10 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   return payload;
 }
 
+export function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
 export function getApiErrorMessage(error: unknown): string {
   if (error instanceof ApiClientError) {
     return error.message;

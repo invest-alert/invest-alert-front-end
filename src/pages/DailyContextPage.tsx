@@ -1,80 +1,142 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { dailyContextApi } from "../lib/api";
-import {
-  formatCurrency,
-  formatDateLabel,
-  formatDateTime,
-  formatPercent,
-  formatSummarySource,
-  getTodayInputValue,
-  toHeadlineSourceLabel
-} from "../lib/format";
-import { getApiErrorMessage } from "../lib/http";
+import { formatCurrency, formatDateLabel, formatPercent, getTodayInputValue, toHeadlineSourceLabel } from "../lib/format";
+import { getApiErrorMessage, isAbortError } from "../lib/http";
 import { useNotice } from "../providers/NoticeProvider";
-import { DailyContextHeadline, DailyContextItem } from "../types/api";
+import { DailyContextItem } from "../types/api";
 
-function hasPendingSummary(context: DailyContextItem): boolean {
-  const status = context.summary_status.toLowerCase();
-  return status === "queued" || status === "processing";
+function timeAgo(dateStr: string | null): string {
+  if (!dateStr) return "";
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
 
-function hasCompletedSummary(headline: DailyContextHeadline): boolean {
-  return Boolean(headline.summary && headline.summary.trim());
+function ContextDetail({ ctx }: { ctx: DailyContextItem }): JSX.Element {
+  const isNegative = ctx.price_change_percent !== null && ctx.price_change_percent < 0;
+
+  return (
+    <article className={`surface-card context-card ${isNegative ? "context-card-negative" : "context-card-positive"}`}>
+      <div className="context-head">
+        <div className="context-identity">
+          <p className="context-title">{ctx.company_name || ctx.input_symbol}</p>
+          <div className="context-subline">
+            <span>{ctx.input_symbol}</span>
+            <span className="exchange-badge">{ctx.exchange}</span>
+            {ctx.resolved_symbol && ctx.resolved_symbol !== ctx.input_symbol && (
+              <span className="soft-tag">{ctx.resolved_symbol}</span>
+            )}
+          </div>
+        </div>
+        <div className={`move-badge ${isNegative ? "negative" : "positive"}`}>
+          {formatPercent(ctx.price_change_percent)}
+        </div>
+      </div>
+
+      <div className="context-price-row">
+        <div className="price-metric">
+          <span className="price-metric-label">Close</span>
+          <span className="price-metric-value">{formatCurrency(ctx.close_price, ctx.currency)}</span>
+        </div>
+        <div className="price-metric">
+          <span className="price-metric-label">Prev close</span>
+          <span className="price-metric-value">{formatCurrency(ctx.previous_close, ctx.currency)}</span>
+        </div>
+        <div className="price-metric">
+          <span className="price-metric-label">Change</span>
+          <span className={`price-metric-value ${isNegative ? "negative" : "positive"}`}>
+            {formatPercent(ctx.price_change_percent)}
+          </span>
+        </div>
+        {ctx.price_date && (
+          <div className="price-metric">
+            <span className="price-metric-label">Price date</span>
+            <span className="price-metric-value">{formatDateLabel(ctx.price_date)}</span>
+          </div>
+        )}
+      </div>
+
+      {ctx.article_count === 0 ? (
+        <div className="headline-empty">
+          <p>No relevant headlines found for this date.</p>
+        </div>
+      ) : (
+        <div className="headline-section">
+          <p className="headline-section-label">
+            {ctx.article_count} headline{ctx.article_count === 1 ? "" : "s"}
+          </p>
+          <div className="headline-stack">
+            {(ctx.top_headlines ?? []).map((headline, i) => (
+              <div key={`${ctx.id}-${i}`} className="news-card">
+                <div className="news-card-meta">
+                  <div className="news-card-meta-left">
+                    <span className="news-source-badge">
+                      {toHeadlineSourceLabel(headline.source)}
+                    </span>
+                    <span className="news-time">{timeAgo(headline.published_at)}</span>
+                  </div>
+                  {headline.url && (
+                    <a href={headline.url} target="_blank" rel="noreferrer" className="news-read-link">
+                      Read →
+                    </a>
+                  )}
+                </div>
+                <p className="news-title">{headline.title}</p>
+                {headline.snippet && <p className="news-snippet">{headline.snippet}</p>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </article>
+  );
 }
 
-function getStatusTone(status: string): "info" | "warn" | "" {
-  const normalized = status.toLowerCase();
-  if (normalized === "queued" || normalized === "processing" || normalized === "pending") {
-    return "info";
-  }
-  if (normalized === "failed" || normalized === "partial") {
-    return "warn";
-  }
-  return "";
-}
+const HARVEST_STEPS = [
+  "Connecting to market data services…",
+  "Phase 1 — Resolving ticker symbols…",
+  "Phase 2 — Fetching prices & headlines in parallel…",
+];
+
+type HarvestSummaryState = {
+  savedCount: number;
+  processedCount: number;
+  cacheHitCount: number;
+};
 
 export function DailyContextPage(): JSX.Element {
   const { showNotice } = useNotice();
 
   const [selectedDate, setSelectedDate] = useState(getTodayInputValue());
   const [contexts, setContexts] = useState<DailyContextItem[]>([]);
-  const [harvestSummary, setHarvestSummary] = useState<{
-    targetDate: string;
-    processedCount: number;
-    savedCount: number;
-  } | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [harvestSummary, setHarvestSummary] = useState<HarvestSummaryState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshingStored, setIsRefreshingStored] = useState(false);
   const [isHarvesting, setIsHarvesting] = useState(false);
-  const [requeuingId, setRequeuingId] = useState<string | null>(null);
-  const [isPolling, setIsPolling] = useState(false);
+  const [harvestStep, setHarvestStep] = useState(0);
+  const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function loadStoredContexts(options?: { silent?: boolean; showSuccess?: boolean; signal?: AbortSignal }): Promise<void> {
     const silent = options?.silent ?? false;
-
-    if (silent) {
-      setIsPolling(true);
-    } else if (!options?.showSuccess || contexts.length === 0) {
-      setIsLoading(true);
-    }
+    if (!silent) setIsLoading(true);
 
     try {
       const response = await dailyContextApi.list(selectedDate, options?.signal);
       setContexts(response.data);
-
-      if (options?.showSuccess) {
-        showNotice(response.message, "success");
-      }
+      if (options?.showSuccess) showNotice(response.message, "success");
     } catch (error) {
-      if (!(error instanceof DOMException && error.name === "AbortError")) {
+      if (!isAbortError(error)) {
         showNotice(getApiErrorMessage(error), "error");
       }
     } finally {
-      if (silent) {
-        setIsPolling(false);
-      } else {
-        setIsRefreshingStored(false);
+      if (!silent) {
         setIsLoading(false);
+        setIsRefreshingStored(false);
       }
     }
   }
@@ -83,30 +145,10 @@ export function DailyContextPage(): JSX.Element {
     const abortController = new AbortController();
     setHarvestSummary(null);
     setContexts([]);
+    setSelectedId(null);
     void loadStoredContexts({ signal: abortController.signal });
-
-    return () => {
-      abortController.abort();
-    };
+    return () => { abortController.abort(); };
   }, [selectedDate]);
-
-  const hasPending = contexts.some(hasPendingSummary);
-  const totalArticles = contexts.reduce((count, context) => count + context.article_count, 0);
-  const pendingCount = contexts.filter(hasPendingSummary).length;
-
-  useEffect(() => {
-    if (!hasPending) {
-      return undefined;
-    }
-
-    const intervalId = window.setInterval(() => {
-      void loadStoredContexts({ silent: true });
-    }, 6000);
-
-    return () => {
-      window.clearInterval(intervalId);
-    };
-  }, [hasPending, selectedDate]);
 
   async function handleLoadStored(): Promise<void> {
     setIsRefreshingStored(true);
@@ -115,92 +157,98 @@ export function DailyContextPage(): JSX.Element {
 
   async function handleHarvest(): Promise<void> {
     setIsHarvesting(true);
+    setHarvestStep(0);
+
+    // Advance through steps while waiting for the response
+    let step = 0;
+    stepTimerRef.current = setInterval(() => {
+      step = Math.min(step + 1, HARVEST_STEPS.length - 1);
+      setHarvestStep(step);
+    }, 2000);
 
     try {
       const response = await dailyContextApi.harvest(selectedDate);
       setContexts(response.data.contexts);
       setHarvestSummary({
-        targetDate: response.data.target_date,
+        savedCount: response.data.saved_count,
         processedCount: response.data.processed_count,
-        savedCount: response.data.saved_count
+        cacheHitCount: response.data.cache_hit_count,
       });
       showNotice(response.message, "success");
     } catch (error) {
       showNotice(getApiErrorMessage(error), "error");
     } finally {
+      if (stepTimerRef.current) clearInterval(stepTimerRef.current);
       setIsHarvesting(false);
     }
   }
 
-  async function handleRequeue(contextId: string): Promise<void> {
-    setRequeuingId(contextId);
-
-    try {
-      const response = await dailyContextApi.requeueSummaries(contextId);
-      showNotice(response.message, "success");
-      await loadStoredContexts({ silent: true });
-    } catch (error) {
-      showNotice(getApiErrorMessage(error), "error");
-    } finally {
-      setRequeuingId(null);
-    }
-  }
+  const totalArticles = contexts.reduce((n, c) => n + c.article_count, 0);
+  const selectedContext = contexts.find((c) => c.id === selectedId) ?? null;
 
   return (
     <div className="page-stack">
       <header className="page-header">
         <div>
           <p className="eyebrow">Daily Context</p>
-          <h2>Review saved price moves and stock-specific headlines for one date at a time.</h2>
-          <p className="muted">Stored data loads by date. Fresh harvest only runs when you explicitly request it.</p>
+          <h2>Market news by company</h2>
+          <p className="muted">Select a company to view its prices and headlines.</p>
         </div>
-        <div className="page-actions">
-          {hasPending ? <span className="status-pill info">{isPolling ? "Polling summaries..." : "Summary updates pending"}</span> : null}
-        </div>
+        <div className="page-actions" />
       </header>
 
       <section className="insight-grid">
         <article className="surface-card insight-card insight-card-primary">
-          <span>Selected date</span>
+          <span>Date</span>
           <strong>{formatDateLabel(selectedDate)}</strong>
-          <small>{contexts.length} saved contexts currently loaded</small>
+          <small>{contexts.length} companies loaded</small>
         </article>
         <article className="surface-card insight-card">
-          <span>Total headlines</span>
+          <span>Headlines</span>
           <strong>{totalArticles}</strong>
-          <small>Across all companies for {selectedDate}</small>
-        </article>
-        <article className="surface-card insight-card">
-          <span>Pending summaries</span>
-          <strong>{pendingCount}</strong>
-          <small>{pendingCount > 0 ? "Auto-refresh is active" : "Everything is up to date"}</small>
+          <small>Across all companies</small>
         </article>
         <article className="surface-card insight-card">
           <span>Last harvest</span>
-          <strong>{harvestSummary ? `${harvestSummary.savedCount}/${harvestSummary.processedCount}` : "Not run"}</strong>
-          <small>{harvestSummary ? `Saved vs processed for ${harvestSummary.targetDate}` : "Run Fetch latest to generate new context"}</small>
+          <strong>{harvestSummary ? `${harvestSummary.savedCount}` : "—"}</strong>
+          <small>{harvestSummary ? `of ${harvestSummary.processedCount} processed` : "Not run yet"}</small>
         </article>
       </section>
 
+      {isHarvesting && <div className="progress-bar" />}
+
       <section className="surface-card controls-card">
-        <div className="toolbar-row">
-          <div className="field-group">
-            <label htmlFor="context-date">Context date</label>
+        <div className="controls-bar">
+          <div className="field-group date-field">
+            <label htmlFor="context-date">Date</label>
             <input
               id="context-date"
               type="date"
               value={selectedDate}
               max={getTodayInputValue()}
-              onChange={(event) => setSelectedDate(event.target.value)}
+              onChange={(e) => setSelectedDate(e.target.value)}
             />
           </div>
-
           <div className="button-row">
-            <button type="button" className="btn btn-ghost" onClick={() => void handleLoadStored()} disabled={isLoading || isRefreshingStored}>
-              {isRefreshingStored ? "Loading..." : "Load stored"}
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => void handleLoadStored()}
+              disabled={isLoading || isRefreshingStored || isHarvesting}
+            >
+              {isRefreshingStored ? (
+                <><span className="btn-spinner" /> Loading...</>
+              ) : "Load stored"}
             </button>
-            <button type="button" className="btn btn-primary" onClick={() => void handleHarvest()} disabled={isHarvesting}>
-              {isHarvesting ? "Fetching latest..." : "Fetch latest"}
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void handleHarvest()}
+              disabled={isHarvesting || isLoading}
+            >
+              {isHarvesting ? (
+                <><span className="btn-spinner" /> Fetching...</>
+              ) : "Fetch latest"}
             </button>
           </div>
         </div>
@@ -209,152 +257,68 @@ export function DailyContextPage(): JSX.Element {
       {isLoading ? (
         <div className="surface-card inline-loader">
           <div className="spinner" />
-          <p>Loading stored daily context for {selectedDate}...</p>
+          <p>Loading context for {formatDateLabel(selectedDate)}...</p>
+        </div>
+      ) : isHarvesting ? (
+        <div className="surface-card harvest-log-panel">
+          <p className="harvest-log-title">Harvest in progress</p>
+          <div className="harvest-log-steps">
+            {HARVEST_STEPS.map((step, i) => {
+              const done = i < harvestStep;
+              const active = i === harvestStep;
+              return (
+                <div key={step} className={`harvest-log-step ${done ? "done" : active ? "active" : "pending"}`}>
+                  <span className="harvest-log-icon">
+                    {done ? "✓" : active ? <span className="btn-spinner" style={{ width: 12, height: 12, borderWidth: 2 }} /> : "·"}
+                  </span>
+                  <span className="harvest-log-text">{step}</span>
+                </div>
+              );
+            })}
+          </div>
+          <p className="harvest-log-hint">This may take a moment for larger watchlists.</p>
         </div>
       ) : contexts.length === 0 ? (
         <div className="surface-card empty-panel">
-          <h3>No stored context for {selectedDate}</h3>
-          <p>Use Fetch latest to harvest fresh market context for every stock in the watchlist.</p>
+          <h3>No context for {formatDateLabel(selectedDate)}</h3>
+          <p>Hit "Fetch latest" to harvest fresh prices and news for your watchlist.</p>
         </div>
       ) : (
-        <div className="context-grid">
-          {contexts.map((context) => (
-            <article
-              key={context.id}
-              className={`surface-card context-card ${
-                context.price_change_percent !== null && context.price_change_percent < 0 ? "context-card-negative" : "context-card-positive"
-              }`}
-            >
-              <div className="context-head">
-                <div className="context-identity">
-                  <p className="context-title">{context.company_name || context.input_symbol}</p>
-                  <div className="context-subline">
-                    <span>{context.input_symbol}</span>
-                    <span className="exchange-badge">{context.exchange}</span>
-                    {context.resolved_symbol ? <span className="soft-tag">{context.resolved_symbol}</span> : null}
+        <div className="page-grid">
+          <aside className="company-sidebar surface-card">
+            <p className="sidebar-label">Companies · {contexts.length}</p>
+            {contexts.map((ctx) => {
+              const isNeg = ctx.price_change_percent !== null && ctx.price_change_percent < 0;
+              return (
+                <button
+                  key={ctx.id}
+                  type="button"
+                  className={`company-item ${ctx.id === selectedId ? "active" : ""}`}
+                  onClick={() => setSelectedId(ctx.id)}
+                >
+                  <div className="company-item-info">
+                    <p className="company-item-name">{ctx.company_name || ctx.input_symbol}</p>
+                    <span className="company-item-ticker">{ctx.input_symbol} · {ctx.exchange}</span>
                   </div>
-                </div>
-
-                <div className="context-actions">
-                  <div
-                    className={`move-badge ${
-                      context.price_change_percent !== null && context.price_change_percent < 0 ? "negative" : "positive"
-                    }`}
-                  >
-                    {formatPercent(context.price_change_percent)}
-                  </div>
-                  <span className={`status-pill ${getStatusTone(context.summary_status)}`}>
-                    {context.summary_status}
+                  <span className={`move-badge ${isNeg ? "negative" : "positive"}`}>
+                    {formatPercent(ctx.price_change_percent)}
                   </span>
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => void handleRequeue(context.id)}
-                    disabled={requeuingId === context.id}
-                  >
-                    {requeuingId === context.id ? "Retrying..." : "Retry summaries"}
-                  </button>
-                </div>
+                </button>
+              );
+            })}
+          </aside>
+
+          <div className="company-detail">
+            {selectedContext === null ? (
+              <div className="surface-card empty-panel context-select-prompt">
+                <p className="prompt-arrow">←</p>
+                <h3>Select a company</h3>
+                <p>Choose a company from the list to view its price data and headlines.</p>
               </div>
-
-              <dl className="context-metrics">
-                <div>
-                  <dt>Context date</dt>
-                  <dd>{formatDateLabel(context.context_date)}</dd>
-                </div>
-                <div>
-                  <dt>Price date</dt>
-                  <dd>{formatDateLabel(context.price_date)}</dd>
-                </div>
-                <div>
-                  <dt>Close price</dt>
-                  <dd>{formatCurrency(context.close_price, context.currency)}</dd>
-                </div>
-                <div>
-                  <dt>Previous close</dt>
-                  <dd>{formatCurrency(context.previous_close, context.currency)}</dd>
-                </div>
-                <div>
-                  <dt>Move</dt>
-                  <dd className={context.price_change_percent !== null && context.price_change_percent < 0 ? "negative" : "positive"}>{formatPercent(context.price_change_percent)}</dd>
-                </div>
-                <div>
-                  <dt>Fetched at</dt>
-                  <dd>{formatDateTime(context.fetched_at)}</dd>
-                </div>
-              </dl>
-
-              {hasPendingSummary(context) ? (
-                <div className="summary-note">
-                  Summaries are still being generated for this context. The page will keep polling the stored data until they complete.
-                </div>
-              ) : null}
-
-              <div className="context-meta-row">
-                <span className="soft-tag">Articles: {context.article_count}</span>
-                {context.summary_requested_at ? <span className="soft-tag">Requested: {formatDateTime(context.summary_requested_at)}</span> : null}
-                {context.summary_completed_at ? <span className="soft-tag">Completed: {formatDateTime(context.summary_completed_at)}</span> : null}
-              </div>
-
-              {context.summary_error ? <p className="inline-error">Summary error: {context.summary_error}</p> : null}
-
-              {context.article_count === 0 ? (
-                <div className="headline-empty">
-                  <h4>No relevant headlines found</h4>
-                  <p>The backend did not find articles worth attaching to this company for the selected date.</p>
-                </div>
-              ) : (
-                <div className="headline-section">
-                  <div className="headline-section-head">
-                    <div>
-                      <p className="eyebrow">Relevant headlines</p>
-                      <h4>{context.article_count} matched article{context.article_count === 1 ? "" : "s"}</h4>
-                    </div>
-                  </div>
-
-                  <div className="headline-stack">
-                  {(context.top_headlines ?? []).map((headline, index) => (
-                    <article key={`${context.id}-${headline.title}-${index}`} className="headline-card">
-                      <div className="headline-top">
-                        <div>
-                          <div className="headline-meta-row">
-                            <span className="headline-source">{toHeadlineSourceLabel(headline.source)}</span>
-                            {headline.published_at ? <span>{formatDateTime(headline.published_at)}</span> : null}
-                            <span className={`summary-chip ${getStatusTone(headline.summary_status || "pending")}`}>{headline.summary_status || "pending"}</span>
-                          </div>
-                          <p className="headline-title">{headline.title}</p>
-                        </div>
-                        {headline.url ? (
-                          <a href={headline.url} target="_blank" rel="noreferrer" className="btn btn-ghost">
-                            Open article
-                          </a>
-                        ) : null}
-                      </div>
-
-                      {hasCompletedSummary(headline) ? (
-                        <div className="headline-summary">
-                          <p>{headline.summary}</p>
-                          <div className="headline-tags">
-                            <span className="soft-tag">{formatSummarySource(headline.summary_source)}</span>
-                            {headline.summary_generated_at ? <span className="soft-tag">{formatDateTime(headline.summary_generated_at)}</span> : null}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="headline-fallback">
-                          <p>{headline.snippet || headline.content_excerpt || "Summary not available yet."}</p>
-                          <div className="headline-tags">
-                            <span className="soft-tag">{formatSummarySource(headline.summary_source)}</span>
-                            {headline.summary_error ? <span className="soft-tag soft-tag-warn">{headline.summary_error}</span> : null}
-                          </div>
-                        </div>
-                      )}
-                    </article>
-                  ))}
-                  </div>
-                </div>
-              )}
-            </article>
-          ))}
+            ) : (
+              <ContextDetail ctx={selectedContext} />
+            )}
+          </div>
         </div>
       )}
     </div>

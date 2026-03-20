@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { watchlistApi } from "../lib/api";
 import { formatDateLabel } from "../lib/format";
-import { getApiErrorMessage } from "../lib/http";
+import { getApiErrorMessage, isAbortError } from "../lib/http";
 import { useAuth } from "../providers/AuthProvider";
 import { useNotice } from "../providers/NoticeProvider";
 import { Exchange, WatchlistItem } from "../types/api";
@@ -31,24 +31,22 @@ export function WatchlistPage(): JSX.Element {
         const response = await watchlistApi.list(abortController.signal);
         setWatchlist(response.data);
       } catch (error) {
-        showNotice(getApiErrorMessage(error), "error");
+        if (!isAbortError(error)) {
+          showNotice(getApiErrorMessage(error), "error");
+        }
       } finally {
         setIsLoading(false);
       }
     })();
 
-    return () => {
-      abortController.abort();
-    };
+    return () => { abortController.abort(); };
   }, [showNotice]);
 
   async function refreshWatchlist(showSuccess = false): Promise<void> {
     try {
       const response = await watchlistApi.list();
       setWatchlist(response.data);
-      if (showSuccess) {
-        showNotice(response.message, "success");
-      }
+      if (showSuccess) showNotice(response.message, "success");
     } catch (error) {
       showNotice(getApiErrorMessage(error), "error");
     }
@@ -63,17 +61,14 @@ export function WatchlistPage(): JSX.Element {
     }
 
     if (isLimitReached) {
-      showNotice("You have reached the 15 stock watchlist limit.", "error");
+      showNotice("You have reached the 15 stock limit.", "error");
       return;
     }
 
     setIsAdding(true);
 
     try {
-      const response = await watchlistApi.add({
-        symbol: symbol.trim(),
-        exchange
-      });
+      const response = await watchlistApi.add({ symbol: symbol.trim(), exchange });
       setSymbol("");
       await refreshWatchlist(false);
       showNotice(response.message, "success");
@@ -86,7 +81,6 @@ export function WatchlistPage(): JSX.Element {
 
   async function handleDelete(stockId: string): Promise<void> {
     setDeletingId(stockId);
-
     try {
       const response = await watchlistApi.remove(stockId);
       setWatchlist((current) => current.filter((item) => item.id !== stockId));
@@ -103,40 +97,43 @@ export function WatchlistPage(): JSX.Element {
       <header className="page-header">
         <div>
           <p className="eyebrow">Portfolio</p>
-          <h2>Build the watchlist your daily context runs against.</h2>
-          <p className="muted">Signed in as {user?.email ?? "Unknown user"}.</p>
+          <h2>Your watchlist</h2>
+          <p className="muted">Signed in as {user?.email ?? "—"}</p>
         </div>
         <div className="page-actions">
           <Link to="/daily-context" className="btn btn-ghost">
-            Open daily context
+            Daily context →
           </Link>
           <button type="button" className="btn btn-ghost" onClick={() => void refreshWatchlist(true)} disabled={isLoading}>
-            Refresh list
+            {isLoading ? <><span className="btn-spinner" /> Refreshing...</> : "Refresh"}
           </button>
         </div>
       </header>
 
       <section className="page-grid">
-        <article className="surface-card summary-panel">
-          <div className="metric-block">
-            <span>Tracked stocks</span>
-            <strong>{watchlist.length}</strong>
+        {/* Side panel */}
+        <aside>
+          <div className="surface-card summary-panel">
+            <div className="metric-block">
+              <span>Tracking</span>
+              <strong>{watchlist.length}</strong>
+            </div>
+            <div className="metric-block">
+              <span>Slots left</span>
+              <strong>{Math.max(remainingSlots, 0)}</strong>
+            </div>
+            <p className="muted" style={{ fontSize: "0.84rem", lineHeight: "1.65" }}>
+              Add companies by name or ticker. The backend resolves the symbol and blocks duplicates.
+            </p>
           </div>
-          <div className="metric-block">
-            <span>Remaining slots</span>
-            <strong>{Math.max(remainingSlots, 0)}</strong>
-          </div>
-          <p className="muted">
-            Use company names or ticker-like values. The backend resolves symbol format and prevents duplicates.
-          </p>
-          <p className="muted">Duplicate and validation errors come directly from backend messages.</p>
-        </article>
+        </aside>
 
+        {/* Add form */}
         <section className="surface-card">
           <div className="section-head">
             <div>
               <p className="eyebrow">Add stock</p>
-              <h3>Keep it focused</h3>
+              <h3>Track a new company</h3>
             </div>
             <span className={`status-pill ${isLimitReached ? "warn" : ""}`}>
               {isLimitReached ? "Limit reached" : `${remainingSlots} slots left`}
@@ -145,12 +142,12 @@ export function WatchlistPage(): JSX.Element {
 
           <form className="add-form" onSubmit={handleAdd}>
             <div className="field-group">
-              <label htmlFor="watchlist-symbol">Symbol or company</label>
+              <label htmlFor="watchlist-symbol">Symbol or company name</label>
               <input
                 id="watchlist-symbol"
                 type="text"
                 value={symbol}
-                onChange={(event) => setSymbol(event.target.value)}
+                onChange={(e) => setSymbol(e.target.value)}
                 placeholder="Tata Motors or TATAMOTORS"
                 maxLength={80}
                 disabled={isAdding || isLimitReached}
@@ -162,7 +159,7 @@ export function WatchlistPage(): JSX.Element {
               <select
                 id="watchlist-exchange"
                 value={exchange}
-                onChange={(event) => setExchange(event.target.value === "BSE" ? "BSE" : "NSE")}
+                onChange={(e) => setExchange(e.target.value === "BSE" ? "BSE" : "NSE")}
                 disabled={isAdding || isLimitReached}
               >
                 <option value="NSE">NSE</option>
@@ -171,29 +168,30 @@ export function WatchlistPage(): JSX.Element {
             </div>
 
             <button type="submit" className="btn btn-primary" disabled={isAdding || isLimitReached}>
-              {isAdding ? "Adding..." : "Add to watchlist"}
+              {isAdding ? <><span className="btn-spinner" /> Adding...</> : "Add"}
             </button>
           </form>
         </section>
       </section>
 
+      {/* Stock list */}
       <section className="surface-card">
         <div className="section-head">
           <div>
-            <p className="eyebrow">Current holdings</p>
-            <h3>Your watchlist</h3>
+            <p className="eyebrow">Holdings</p>
+            <h3>Current watchlist</h3>
           </div>
         </div>
 
         {isLoading ? (
           <div className="inline-loader">
             <div className="spinner" />
-            <p>Loading your watchlist...</p>
+            <p>Loading watchlist...</p>
           </div>
         ) : watchlist.length === 0 ? (
           <div className="empty-panel">
-            <h4>No stocks added yet</h4>
-            <p>Add your first company to start collecting daily context.</p>
+            <h4>No stocks yet</h4>
+            <p>Add your first company above to start collecting daily context.</p>
           </div>
         ) : (
           <div className="list-grid">
@@ -202,7 +200,7 @@ export function WatchlistPage(): JSX.Element {
                 <div className="watch-card-head">
                   <div>
                     <h4>{item.resolved_company_name || item.symbol}</h4>
-                    <p className="muted">
+                    <p className="muted" style={{ marginTop: "0.2rem", fontSize: "0.85rem" }}>
                       {item.symbol} <span className="exchange-badge">{item.exchange}</span>
                     </p>
                   </div>
@@ -212,17 +210,17 @@ export function WatchlistPage(): JSX.Element {
                     onClick={() => void handleDelete(item.id)}
                     disabled={deletingId === item.id}
                   >
-                    {deletingId === item.id ? "Removing..." : "Delete"}
+                    {deletingId === item.id ? <><span className="btn-spinner" /> Removing...</> : "Remove"}
                   </button>
                 </div>
 
                 <dl className="info-grid">
                   <div>
                     <dt>Resolved symbol</dt>
-                    <dd>{item.resolved_symbol || "Pending resolution"}</dd>
+                    <dd>{item.resolved_symbol || "Pending"}</dd>
                   </div>
                   <div>
-                    <dt>Added on</dt>
+                    <dt>Added</dt>
                     <dd>{formatDateLabel(item.created_at)}</dd>
                   </div>
                 </dl>

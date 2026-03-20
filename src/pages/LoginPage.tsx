@@ -27,11 +27,7 @@ export function LoginPage(): JSX.Element {
     setIsSubmitting(true);
 
     try {
-      await login({
-        email: email.trim(),
-        password
-      });
-
+      await login({ email: email.trim(), password });
       const state = location.state as LocationState | null;
       navigate(state?.from ?? "/watchlist", { replace: true });
     } catch (error) {
@@ -46,42 +42,44 @@ export function LoginPage(): JSX.Element {
       <section className="auth-card">
         <div className="auth-copy">
           <p className="eyebrow">Welcome back</p>
-          <h1>Log in to your investor dashboard.</h1>
-          <p className="muted">
-            We&apos;ll restore your watchlist, token session, and stored daily context without triggering a fresh harvest.
-          </p>
+          <h1>Sign in to Invest Alert</h1>
+          <p>Your watchlist and daily context will be ready exactly where you left off.</p>
         </div>
 
         <form className="auth-form" onSubmit={handleSubmit}>
-          <label htmlFor="login-email">Email</label>
-          <input
-            id="login-email"
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="user@example.com"
-            required
-          />
+          <div className="field-group">
+            <label htmlFor="login-email">Email address</label>
+            <input
+              id="login-email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              required
+            />
+          </div>
 
-          <label htmlFor="login-password">Password</label>
-          <input
-            id="login-password"
-            type="password"
-            autoComplete="current-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            placeholder="StrongPass123!"
-            required
-          />
+          <div className="field-group">
+            <label htmlFor="login-password">Password</label>
+            <input
+              id="login-password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              required
+            />
+          </div>
 
           <button type="submit" className="btn btn-primary btn-block" disabled={isSubmitting || status === "loading"}>
-            {isSubmitting ? "Logging in..." : "Login"}
+            {isSubmitting ? "Signing in..." : "Sign in"}
           </button>
         </form>
 
         <p className="auth-footnote">
-          New here? <Link to="/register">Create your account</Link>
+          No account yet? <Link to="/register">Create one for free</Link>
         </p>
       </section>
     </div>

@@ -80,7 +80,16 @@ export type DailyContextHarvestSummary = {
   target_date: string;
   processed_count: number;
   saved_count: number;
+  cache_hit_count: number;
   contexts: DailyContextItem[];
+};
+
+export type MarketOverviewItem = {
+  label: string;
+  ticker: string;
+  price: number | null;
+  change_percent: number | null;
+  currency: string;
 };
 
 export type SummaryTaskStatus = {

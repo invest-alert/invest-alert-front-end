@@ -22,17 +22,14 @@ export function RegisterPage(): JSX.Element {
     event.preventDefault();
 
     if (password !== confirmPassword) {
-      showNotice("Password and confirm password must match.", "error");
+      showNotice("Passwords do not match.", "error");
       return;
     }
 
     setIsSubmitting(true);
 
     try {
-      await register({
-        email: email.trim(),
-        password
-      });
+      await register({ email: email.trim(), password });
       navigate("/watchlist", { replace: true });
     } catch (error) {
       showNotice(getApiErrorMessage(error), "error");
@@ -45,55 +42,58 @@ export function RegisterPage(): JSX.Element {
     <div className="auth-page">
       <section className="auth-card">
         <div className="auth-copy">
-          <p className="eyebrow">Start simple</p>
-          <h1>Create your Invest Alert account.</h1>
-          <p className="muted">
-            Register once and move straight into your watchlist. The app stores access and refresh tokens centrally and
-            refreshes them automatically when protected requests expire.
-          </p>
+          <p className="eyebrow">Get started</p>
+          <h1>Create your account</h1>
+          <p>Register once, build your watchlist, and get stock-specific news every day.</p>
         </div>
 
         <form className="auth-form" onSubmit={handleSubmit}>
-          <label htmlFor="register-email">Email</label>
-          <input
-            id="register-email"
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="user@example.com"
-            required
-          />
+          <div className="field-group">
+            <label htmlFor="register-email">Email address</label>
+            <input
+              id="register-email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              required
+            />
+          </div>
 
-          <label htmlFor="register-password">Password</label>
-          <input
-            id="register-password"
-            type="password"
-            autoComplete="new-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            placeholder="StrongPass123!"
-            required
-          />
+          <div className="field-group">
+            <label htmlFor="register-password">Password</label>
+            <input
+              id="register-password"
+              type="password"
+              autoComplete="new-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              required
+            />
+          </div>
 
-          <label htmlFor="register-confirm-password">Confirm password</label>
-          <input
-            id="register-confirm-password"
-            type="password"
-            autoComplete="new-password"
-            value={confirmPassword}
-            onChange={(event) => setConfirmPassword(event.target.value)}
-            placeholder="StrongPass123!"
-            required
-          />
+          <div className="field-group">
+            <label htmlFor="register-confirm-password">Confirm password</label>
+            <input
+              id="register-confirm-password"
+              type="password"
+              autoComplete="new-password"
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="••••••••"
+              required
+            />
+          </div>
 
           <button type="submit" className="btn btn-primary btn-block" disabled={isSubmitting || status === "loading"}>
-            {isSubmitting ? "Creating account..." : "Register"}
+            {isSubmitting ? "Creating account..." : "Create account"}
           </button>
         </form>
 
         <p className="auth-footnote">
-          Already have an account? <Link to="/login">Log in</Link>
+          Already have an account? <Link to="/login">Sign in</Link>
         </p>
       </section>
     </div>
