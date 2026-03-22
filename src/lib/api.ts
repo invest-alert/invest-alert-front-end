@@ -1,7 +1,6 @@
 import {
   DailyContextHarvestSummary,
   DailyContextItem,
-  Exchange,
   MarketOverviewItem,
   SummaryTaskStatus,
   TokenPair,
@@ -17,8 +16,7 @@ type AuthPayload = {
 };
 
 type AddWatchlistPayload = {
-  symbol: string;
-  exchange: Exchange;
+  company_name: string;
 };
 
 export const authApi = {

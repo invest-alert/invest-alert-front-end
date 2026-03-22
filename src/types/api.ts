@@ -29,14 +29,11 @@ export type UserProfile = {
   created_at: string;
 };
 
-export type Exchange = "NSE" | "BSE";
-
 export type WatchlistItem = {
   id: string;
-  symbol: string;
-  exchange: Exchange;
-  resolved_symbol: string | null;
-  resolved_company_name: string | null;
+  symbol: string | null;
+  exchange: string | null;
+  company_name: string;
   created_at: string;
 };
 
@@ -59,9 +56,8 @@ export type DailyContextItem = {
   context_date: string;
   price_date: string | null;
   company_name: string;
-  input_symbol: string;
-  resolved_symbol: string | null;
-  exchange: string;
+  input_symbol: string | null;
+  exchange: string | null;
   close_price: number | null;
   previous_close: number | null;
   price_change_percent: number | null;

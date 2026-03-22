@@ -5,7 +5,7 @@ import { formatDateLabel } from "../lib/format";
 import { getApiErrorMessage, isAbortError } from "../lib/http";
 import { useAuth } from "../providers/AuthProvider";
 import { useNotice } from "../providers/NoticeProvider";
-import { Exchange, WatchlistItem } from "../types/api";
+import { WatchlistItem } from "../types/api";
 
 const WATCHLIST_LIMIT = 15;
 
@@ -14,8 +14,7 @@ export function WatchlistPage(): JSX.Element {
   const { showNotice } = useNotice();
 
   const [watchlist, setWatchlist] = useState<WatchlistItem[]>([]);
-  const [symbol, setSymbol] = useState("");
-  const [exchange, setExchange] = useState<Exchange>("NSE");
+  const [companyName, setCompanyName] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isAdding, setIsAdding] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -55,8 +54,8 @@ export function WatchlistPage(): JSX.Element {
   async function handleAdd(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
 
-    if (!symbol.trim()) {
-      showNotice("Please enter a stock symbol or company name.", "error");
+    if (!companyName.trim()) {
+      showNotice("Please enter the company name.", "error");
       return;
     }
 
@@ -68,8 +67,8 @@ export function WatchlistPage(): JSX.Element {
     setIsAdding(true);
 
     try {
-      const response = await watchlistApi.add({ symbol: symbol.trim(), exchange });
-      setSymbol("");
+      const response = await watchlistApi.add({ company_name: companyName.trim() });
+      setCompanyName("");
       await refreshWatchlist(false);
       showNotice(response.message, "success");
     } catch (error) {
@@ -123,7 +122,7 @@ export function WatchlistPage(): JSX.Element {
               <strong>{Math.max(remainingSlots, 0)}</strong>
             </div>
             <p className="muted" style={{ fontSize: "0.84rem", lineHeight: "1.65" }}>
-              Add companies by name or ticker. The backend resolves the symbol and blocks duplicates.
+              Enter the full company name. The ticker is detected automatically. Duplicates are blocked.
             </p>
           </div>
         </aside>
@@ -142,29 +141,17 @@ export function WatchlistPage(): JSX.Element {
 
           <form className="add-form" onSubmit={handleAdd}>
             <div className="field-group">
-              <label htmlFor="watchlist-symbol">Symbol or company name</label>
+              <label htmlFor="watchlist-company">Company name <span style={{ color: "var(--color-danger, #e55)" }}>*</span></label>
               <input
-                id="watchlist-symbol"
+                id="watchlist-company"
                 type="text"
-                value={symbol}
-                onChange={(e) => setSymbol(e.target.value)}
-                placeholder="Tata Motors or TATAMOTORS"
-                maxLength={80}
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+                placeholder="e.g. Tata Motors Limited"
+                maxLength={100}
+                required
                 disabled={isAdding || isLimitReached}
               />
-            </div>
-
-            <div className="field-group">
-              <label htmlFor="watchlist-exchange">Exchange</label>
-              <select
-                id="watchlist-exchange"
-                value={exchange}
-                onChange={(e) => setExchange(e.target.value === "BSE" ? "BSE" : "NSE")}
-                disabled={isAdding || isLimitReached}
-              >
-                <option value="NSE">NSE</option>
-                <option value="BSE">BSE</option>
-              </select>
             </div>
 
             <button type="submit" className="btn btn-primary" disabled={isAdding || isLimitReached}>
@@ -199,10 +186,12 @@ export function WatchlistPage(): JSX.Element {
               <article key={item.id} className="watch-card">
                 <div className="watch-card-head">
                   <div>
-                    <h4>{item.resolved_company_name || item.symbol}</h4>
-                    <p className="muted" style={{ marginTop: "0.2rem", fontSize: "0.85rem" }}>
-                      {item.symbol} <span className="exchange-badge">{item.exchange}</span>
-                    </p>
+                    <h4>{item.company_name}</h4>
+                    {item.symbol && (
+                      <p className="muted" style={{ marginTop: "0.2rem", fontSize: "0.85rem" }}>
+                        {item.symbol} {item.exchange && <span className="exchange-badge">{item.exchange}</span>}
+                      </p>
+                    )}
                   </div>
                   <button
                     type="button"
@@ -215,10 +204,6 @@ export function WatchlistPage(): JSX.Element {
                 </div>
 
                 <dl className="info-grid">
-                  <div>
-                    <dt>Resolved symbol</dt>
-                    <dd>{item.resolved_symbol || "Pending"}</dd>
-                  </div>
                   <div>
                     <dt>Added</dt>
                     <dd>{formatDateLabel(item.created_at)}</dd>

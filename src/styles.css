@@ -1348,6 +1348,18 @@ input[type="date"]::-webkit-calendar-picker-indicator:hover {
   overflow: hidden;
 }
 
+.news-summary {
+  font-size: 0.87rem;
+  color: var(--text-dim);
+  line-height: 1.65;
+}
+
+.news-summary-pending {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
 .news-read-link {
   display: inline-flex;
   align-items: center;

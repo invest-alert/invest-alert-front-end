@@ -5,6 +5,16 @@ import { getApiErrorMessage, isAbortError } from "../lib/http";
 import { useNotice } from "../providers/NoticeProvider";
 import { DailyContextItem } from "../types/api";
 
+/** Returns true only when snippet adds real information beyond the headline title. */
+function snippetIsDistinct(snippet: string | null, title: string): boolean {
+  if (!snippet) return false;
+  const s = snippet.toLowerCase().trim();
+  const t = title.toLowerCase().trim();
+  // Snippet is useless if it starts with the first 30 chars of the title (title + source name pattern)
+  if (t.length >= 10 && s.startsWith(t.substring(0, Math.min(t.length, 40)))) return false;
+  return true;
+}
+
 function timeAgo(dateStr: string | null): string {
   if (!dateStr) return "";
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -25,11 +35,8 @@ function ContextDetail({ ctx }: { ctx: DailyContextItem }): JSX.Element {
         <div className="context-identity">
           <p className="context-title">{ctx.company_name || ctx.input_symbol}</p>
           <div className="context-subline">
-            <span>{ctx.input_symbol}</span>
-            <span className="exchange-badge">{ctx.exchange}</span>
-            {ctx.resolved_symbol && ctx.resolved_symbol !== ctx.input_symbol && (
-              <span className="soft-tag">{ctx.resolved_symbol}</span>
-            )}
+            {ctx.input_symbol && <span>{ctx.input_symbol}</span>}
+            {ctx.exchange && <span className="exchange-badge">{ctx.exchange}</span>}
           </div>
         </div>
         <div className={`move-badge ${isNegative ? "negative" : "positive"}`}>
@@ -86,7 +93,13 @@ function ContextDetail({ ctx }: { ctx: DailyContextItem }): JSX.Element {
                   )}
                 </div>
                 <p className="news-title">{headline.title}</p>
-                {headline.snippet && <p className="news-snippet">{headline.snippet}</p>}
+                {headline.summary_status === "completed" && headline.summary ? (
+                  <p className="news-summary">{headline.summary}</p>
+                ) : (headline.summary_status === "pending" || headline.summary_status === "processing") ? (
+                  <p className="news-summary-pending">Generating summary…</p>
+                ) : snippetIsDistinct(headline.snippet, headline.title) ? (
+                  <p className="news-snippet">{headline.snippet}</p>
+                ) : null}
               </div>
             ))}
           </div>
@@ -100,13 +113,9 @@ const HARVEST_STEPS = [
   "Connecting to market data services…",
   "Phase 1 — Resolving ticker symbols…",
   "Phase 2 — Fetching prices & headlines in parallel…",
+  "Phase 3 — Generating article summaries…",
 ];
 
-type HarvestSummaryState = {
-  savedCount: number;
-  processedCount: number;
-  cacheHitCount: number;
-};
 
 export function DailyContextPage(): JSX.Element {
   const { showNotice } = useNotice();
@@ -114,14 +123,35 @@ export function DailyContextPage(): JSX.Element {
   const [selectedDate, setSelectedDate] = useState(getTodayInputValue());
   const [contexts, setContexts] = useState<DailyContextItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [harvestSummary, setHarvestSummary] = useState<HarvestSummaryState | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshingStored, setIsRefreshingStored] = useState(false);
   const [isHarvesting, setIsHarvesting] = useState(false);
   const [harvestStep, setHarvestStep] = useState(0);
   const stepTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollAttemptsRef = useRef(0);
+  const POLL_MAX_ATTEMPTS = 18; // ~90s at 5s intervals
 
-  async function loadStoredContexts(options?: { silent?: boolean; showSuccess?: boolean; signal?: AbortSignal }): Promise<void> {
+  function hasPendingSummaries(ctxList: DailyContextItem[]): boolean {
+    return ctxList.some(
+      (c) =>
+        c.summary_status === "queued" ||
+        c.summary_status === "processing" ||
+        (c.top_headlines ?? []).some(
+          (h) => h.summary_status === "pending" || h.summary_status === "processing"
+        )
+    );
+  }
+
+  function stopPolling(): void {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    pollAttemptsRef.current = 0;
+  }
+
+  async function loadStoredContexts(options?: { silent?: boolean; showSuccess?: boolean; signal?: AbortSignal }): Promise<DailyContextItem[]> {
     const silent = options?.silent ?? false;
     if (!silent) setIsLoading(true);
 
@@ -129,10 +159,12 @@ export function DailyContextPage(): JSX.Element {
       const response = await dailyContextApi.list(selectedDate, options?.signal);
       setContexts(response.data);
       if (options?.showSuccess) showNotice(response.message, "success");
+      return response.data;
     } catch (error) {
       if (!isAbortError(error)) {
         showNotice(getApiErrorMessage(error), "error");
       }
+      return [];
     } finally {
       if (!silent) {
         setIsLoading(false);
@@ -143,11 +175,11 @@ export function DailyContextPage(): JSX.Element {
 
   useEffect(() => {
     const abortController = new AbortController();
-    setHarvestSummary(null);
+    stopPolling();
     setContexts([]);
     setSelectedId(null);
     void loadStoredContexts({ signal: abortController.signal });
-    return () => { abortController.abort(); };
+    return () => { abortController.abort(); stopPolling(); };
   }, [selectedDate]);
 
   async function handleLoadStored(): Promise<void> {
@@ -158,23 +190,34 @@ export function DailyContextPage(): JSX.Element {
   async function handleHarvest(): Promise<void> {
     setIsHarvesting(true);
     setHarvestStep(0);
+    stopPolling();
 
     // Advance through steps while waiting for the response
     let step = 0;
     stepTimerRef.current = setInterval(() => {
       step = Math.min(step + 1, HARVEST_STEPS.length - 1);
       setHarvestStep(step);
-    }, 2000);
+    }, 4000);
 
     try {
       const response = await dailyContextApi.harvest(selectedDate);
       setContexts(response.data.contexts);
-      setHarvestSummary({
-        savedCount: response.data.saved_count,
-        processedCount: response.data.processed_count,
-        cacheHitCount: response.data.cache_hit_count,
-      });
       showNotice(response.message, "success");
+
+      // Poll for summary updates if any summaries are still being generated
+      if (hasPendingSummaries(response.data.contexts)) {
+        pollAttemptsRef.current = 0;
+        pollTimerRef.current = setInterval(() => {
+          pollAttemptsRef.current += 1;
+          if (pollAttemptsRef.current >= POLL_MAX_ATTEMPTS) {
+            stopPolling();
+            return;
+          }
+          void loadStoredContexts({ silent: true }).then((latest) => {
+            if (!hasPendingSummaries(latest)) stopPolling();
+          });
+        }, 5000);
+      }
     } catch (error) {
       showNotice(getApiErrorMessage(error), "error");
     } finally {
@@ -207,11 +250,6 @@ export function DailyContextPage(): JSX.Element {
           <span>Headlines</span>
           <strong>{totalArticles}</strong>
           <small>Across all companies</small>
-        </article>
-        <article className="surface-card insight-card">
-          <span>Last harvest</span>
-          <strong>{harvestSummary ? `${harvestSummary.savedCount}` : "—"}</strong>
-          <small>{harvestSummary ? `of ${harvestSummary.processedCount} processed` : "Not run yet"}</small>
         </article>
       </section>
 
@@ -298,7 +336,7 @@ export function DailyContextPage(): JSX.Element {
                 >
                   <div className="company-item-info">
                     <p className="company-item-name">{ctx.company_name || ctx.input_symbol}</p>
-                    <span className="company-item-ticker">{ctx.input_symbol} · {ctx.exchange}</span>
+                    <span className="company-item-ticker">{[ctx.input_symbol, ctx.exchange].filter(Boolean).join(" · ")}</span>
                   </div>
                   <span className={`move-badge ${isNeg ? "negative" : "positive"}`}>
                     {formatPercent(ctx.price_change_percent)}
